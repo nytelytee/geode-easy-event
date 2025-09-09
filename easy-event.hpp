@@ -86,7 +86,7 @@ namespace nytelyte::easy_event {
       using Listener = geode::EventListener<Filter>;
 
       // the parameters the EasyEvent is using right now, in case you need them
-      static constexpr const char* ID = std::is_void_v<EventID> ? nullptr : EventID::value;
+      static constexpr const char* ID = []{ if constexpr (std::is_void_v<EventID>) return nullptr; else return EventID::value; }();
       using Returns = EventReturn;
       using Takes = std::tuple<EventParameters...>;
 
