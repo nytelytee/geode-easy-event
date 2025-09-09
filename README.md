@@ -237,7 +237,7 @@ The ID is defined only once, so you can't misspell it; check.
 You can't accidentally not post the event and not notice it, because it's a static method on the EasyEvent type.
 You get return values from functions without having to manually mess around with pointers repeatedly, for every API method.
 
-Do note that, under the hood, the "return values" are implemented the same way as my example which worked directly with dispatch event, with pointers, you just don't have to look at that.
+Do note that, under the hood, the "return values" are implemented the same way as my example which worked directly with dispatch events, with pointers, you just don't have to look at that.
 
 To me, this reads a lot better than event exports, plus you still get fine-grained control over the events themselves; more in the [documentation](DOCS.md).
 
@@ -245,3 +245,5 @@ To me, this reads a lot better than event exports, plus you still get fine-grain
 
 Copy the header file into your mod, include it. Make sure to expose it in your API if you are using it there, and you probably are, since that is the point.  
 This software (and readme+documentation) is released into the public domain.
+
+Also make sure you compile with Clang. There is an internal compiler error on MSVC. If you know how to work around it without changing the interface, please open a pull request.
