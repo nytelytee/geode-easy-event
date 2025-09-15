@@ -233,9 +233,9 @@ MyAmazingEvent::send<ListenerResult::Propagate>(+[](int x){ return x + 1; });
 ```
 
 Let's see...  
-The ID is defined only once, so you can't misspell it; check.
-You can't accidentally not post the event and not notice it, because it's a static method on the EasyEvent type.
-You get return values from functions without having to manually mess around with pointers repeatedly, for every API method.
+The ID is defined only once, so you can't misspell it; check.  
+You can't accidentally not post the event and not notice it, because it's a static method on the EasyEvent type; check.  
+You get return values from functions without having to manually mess around with pointers repeatedly, for every API method; check.
 
 Do note that, under the hood, the "return values" are implemented the same way as my example which worked directly with dispatch events, with pointers, you just don't have to look at that.
 
@@ -243,7 +243,7 @@ To me, this reads a lot better than event exports, plus you still get fine-grain
 
 ## How to use
 
-Copy the header file into your mod, include it. Make sure to expose it in your API if you are using it there, and you probably are, since that is the point.  
-This software (and readme+documentation) is released into the public domain.
-
+Copy the header file (preferably the one from releases, as the one in the repo uses a lot of macros; the release version selectively expands those macros to make the code less ugly and to improve error messages; the generator script is also included in this repository, under the name `generate.sh`) into your mod, include it. Make sure to expose it in your API if you are using it there, and you probably are, since that is the point.  
 Also make sure you compile with Clang. There is an internal compiler error on MSVC. If you know how to work around it without changing the interface, please open a pull request.
+
+This software, readme (excluding the examples copied directly from the Geode docs), and documentation is released into the public domain.
