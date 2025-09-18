@@ -248,4 +248,4 @@ Also make sure you compile with Clang. There is an internal compiler error on MS
 
 This software, readme (excluding the examples copied directly from the Geode docs), and documentation is released into the public domain.
 
-There is also a testing file `event-teser.cpp`, which instantiates everys template function (I *think*) to make sure it compiles. You may also use it as an example, but a better example mod may be added soon; for now, check out [Icon Kit Filter & Sort](https://github.com/nytelytee/geode-icon-kit-filter-and-sort), a mod of mine which uses the EasyEvent system.
+There is also a testing file `event-teser.cpp`, which instantiates every template function (I *think*) to make sure it compiles. You may also use it as an example, but a better example mod may be added soon; for now, check out [Icon Kit Filter & Sort](https://github.com/nytelytee/geode-icon-kit-filter-and-sort), a mod of mine which uses the EasyEvent system.
