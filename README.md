@@ -1,177 +1,11 @@
 # EasyEvent
 
-EasyEvent is a header-only library designed to make designing Geode event-based APIs easier and less error-prone.
+EasyEvent is a header-only library designed to make designing Geode event-based APIs easier and nicer to use.
+This is meant to be an alternative to the event export macro.
 
-## Events
-The main problem with making an event-based API in Geode is how much boilerplate defining events requires.
-Take the example from the Geode documentation:
-#### Creation
-```cpp
-// DragDropEvent.hpp
+## Event export macro
 
-#include <Geode/loader/Event.hpp> // Event
-#include <Geode/cocos/cocoa/CCGeometry.h> // CCPoint
-
-#include <vector> // std::vector
-#include <filesystem> // std::filesystem::path
-
-using namespace geode::prelude;
-
-class DragDropEvent : public Event {
-protected:
-    std::vector<std::filesystem::path> m_files;
-    CCPoint m_location;
-
-public:
-    DragDropEvent(std::vector<std::filesystem::path> const& files, CCPoint const& location);
-
-    std::vector<std::filesystem::path> getFiles() const;
-    CCPoint getLocation() const;
-};
-```
-#### Posting
-```cpp
-// Assume those variables actually have useful values
-std::vector<std::filesystem::path> files;
-CCPoint location = CCPoint { 0.0f, 0.0f };
-
-DragDropEvent(files, location).post();
-```
-#### Listening
-```cpp
-// main.cpp
-
-#include <Geode/DefaultInclude.hpp> // $execute
-#include <Geode/loader/Event.hpp> // EventListener, EventFilter
-
-#include "DragDropEvent.hpp" // Our created event
-
-using namespace geode::prelude;
-
-// Execute runs the code inside **when your mod is loaded**
-$execute {
-    // This technically doesn't leak memory, since the listener should live for the entirety of the program
-    new EventListener<EventFilter<DragDropEvent>>(+[](DragDropEvent* ev) {
-        for (std::filesystem::path& file : ev->getFiles()) {
-            log::debug("File dropped: {}", file);
-
-            // ... handle the files here
-        }
-
-        // We have to propagate the event further, so that other listeners
-        // can handle this event
-        return ListenerResult::Propagate;
-    });
-}
-```
-## Dispatch events
-That's a lot of code if all you need to do is expose some functions in your API...
-Luckily, Geode itself already has a way to address this: dispatch events.
-Dispatch events exist to reduce boilerplate when all you need is a simple event.  
-Let's look at how they're used (also from the Geode documentation):
-
-#### Creation
-```cpp
-using DragDropEvent = geode::DispatchEvent<ghc::filesystem::path>;
-using DragDropFilter = geode::DispatchFilter<ghc::filesystem::path>;
-```
-#### Posting
-```cpp
-DragDropEvent("geode.drag-drop/default", "path/to/file").post();
-```
-#### Listening
-```cpp
-$execute {
-    new EventListener(+[](ghc::filesystem::path const& path) {
-        log::info("File dropped: {}", path);
-        return ListenerResult::Propagate;
-    }, DragDropFilter("geode.drag-drop/default"));
-};
-```
-
-## My amazing event(s)
-Well, that's certainly better. Let me try defining my own amazing event using Geode's dispatch event system!
-#### Creation
-```cpp
-using MyAmazingFilter = DispatchFilter<int>;
-// shorthand so you don't have to type the arguments twice, the Geode docs don't talk about this
-using MyAmazingEvent = MyAmazingFilter::Event;
-```
-#### Posting
-```cpp
-MyAmazingEvent("nytelyte.example/my-amazing-event", 5);
-```
-#### Listening
-```cpp
-$execute {
-  new EventListener(+[](int x) {
-    log::info("You sent: {}. Amazing.", x);
-    return ListenerResult::Propagate;
-  }, DragDropFilter("nytelyte.example/my-amazing-even"));
-};
-```
-
-Okay, that compiles fine without any warnings, let's push whatever button sends the event, check the logs and...  
-
-Nothing happened.  
-There were no errors, no crashes, just... **nothing happened**.  
-
-Okay, what did I do wrong? Let me check my code.  
-Okay, the creation looks fine, you can't exactly mess up there.  
-
-Oh. I forgot to put `.post()` after the event. I did not get any warnings from my compiler, it just constructed the event object and then did nothing with it.  
-
-Minor hiccup, let's do this again:
-```cpp
-MyAmazingEvent("nytelyte.example/my-amazing-event", 5).post();
-```
-Now I actually posted the event; surely, it's going to work now.
-
-Now, let us press our amazing button that (actually) posts our amazing event, check the logs and...
-
-Nothing happened.  
-Okay, are you serious? What am I doing wrong now? The creating and posting is fine. Let me check the listening part.  
-
-Oh. I misspelled the event ID. I forgot a 't' at the end.  
-Wait, **why** exactly do I need to specify this in two different places?
-
-At least in the listening side, you can use the `_spr` user-defined literal so you don't have to type out your mod's ID every time. But... you can't exactly do that on the posting side, can you? The parts that post your events typically go into an API header that other mod developers will be including. There, `_spr` would expand the event IDs to contain the mod ID which is including your API. You certainly don't want that. Best not forget about that either.  
-
-Well... that sucks. I guess I just have to not make any mistakes that the compiler won't warn me about because all of that was perfectly valid C++ code. If you are making an API that requires a fair amount of events, good luck having to go through this whole dance for every single feature you want to add to your API.
-
-This could, of course, just be a skill issue on my part. Maybe you don't have these issues, or you have tools that address them. But I still hold that it should be **impossible** to make these types of mistakes.
-
-## What about functions that actually return things? 
-Well that's for the errors (or lack thereof), but what about the features? Geode event listeners can't have return values, they just return a listener result to signal to the event system what it needs to do further. What if I want my API to call functions that have return values? Well, here's how you could do it (no intentional mistakes this time, promise):
-#### Creation
-```cpp
-using MyAmazingFilter = DispatchFilter<int*, int>;
-using MyAmazingEvent = MyAmazingFilter::Event;
-```
-#### Posting
-```cpp
-// in your api, this piece of code would typically be put inside a function, so that calling that function looks like just calling something that returns the result directly
-
-int result = 0;
-MyAmazingEvent("nytelyte.example/my-amazing-event", &result, 5).post();
-// you now have access to whatever result the event listener decides to store into the result address, through result
-```
-#### Listening
-```cpp
-$execute {
-  new EventListener(+[](int* result, int x) {
-    *result = x + 1;
-    return ListenerResult::Propagate;
-  }, DragDropFilter("nytelyte.example/my-amazing-event"));
-};
-```
-
-Well, I now have to mess around with pointers if I want a return value? Really? I mean, pointers are not complicated sure, but this is still boilerplate; I will have to do this for every event that returns a result; the same pattern, over and over.
-
-## Event exports
-Okay, does Geode have anything else that helps me deal with these issues?
-
-Well, we have Geode event exports (again, straight from the Geode docs):
+Straight from the Geode docs:
 #### Header
 ```cpp
 // (In your api distributed header file)
@@ -202,50 +36,95 @@ Result<int> api::addNumbers(int a, int b) {
 Well, that looks pretty close to how you'd generally split your code into header and source, albeit with sligthly more wacky syntax, and the several caveats that the example explicitly mentions... Where even are the events?  
 In reality, this will define events that grab function pointers, and call the function when the API function is called.
 
-This is a bit better. It **is** harder to make mistakes (albeit not impossible), but uh...
+I personally find this clunky and ugly:
+- you have to define a `MY_MOD_ID`, which makes sense, because the underlying events this creates will use the API's mod id, not yours
+- you need to define a random `GEODE_DEFINE_EVENT_EXPORTS` before including an api header; this modifies the behavior of `#include <Geode/loader/Dispatch.hpp>`, specifically the `GEODE_EVENT_EXPORT` macro
+- you have to write the function name twice in your header, and you have to pass the arguments to the macro as well; this is a limitation of macros
 
-## Why do I have to do this?
-Let me be real, I just really don't like that users have to use this macro-heavy syntax and define things in the preprocessor to magically change the behavior of the code. I also dislike the fact that you have to duplicate the function name, and the function arguments too (because that second macro argument there is you specifying how the event export system should be calling your function).
+I feel like this is too much magic for a subpar result, aesthetically speaking. There are no functional issues with this, however, and thus no problems with you just sticking to it if you wish.
+I also do not like that it hides the events from you.
 
-I want something that has just enough "magic" to help you not make mistakes that the compiler can't catch, but also not crazy-looking, like event exports. Note that event exports really are fine if you want something that *works* and don't care as much as me about how it *looks*, go ahead and use them if you saw me describe them and decided that, unlike me, you don't see anything "wrong" with them. They do fix a lot of the issues with dispatch events that I was talking about: the ID is nowhere to be seen (although you can use a custom one, you still only define it once) and thus you don't really have to duplicate it anywhere, you can't accidentally forget to post the event, because you just are not interacting with the underlying Geode events themselves when writing your API, and they have return values built in, you don't have to manually mess around with pointers.
+## No event export macro
 
-These are all good features, but I am not a fan of the way in which I have to make use of them.
+So, taking it for granted that we do not want to use the event export macros, how would we do something like this normally, without too much boilerplate?
 
-I am willing to concede that this entirely a me problem and that no one besides me cares about any of this, but I decided to write this up and write my idea of a fix anyway.
-
-## What I want
-
-But what if we could, with just a *little bit* of template magic, do something like this:
-#### Creation
+#### Header
 ```cpp
-using MyAmazingEvent = EasyEvent::id<"nytelyte.example/my-amazing-event">::takes<int>;
-using MyAmazingEventWithAReturnValue = EasyEvent::id<"nytelyte.example/my-amazing-event-with-a-return-value">::takes<int>::returns<int>;
+namespace my_mod {
+  // we make a dispatch event which contains one extra argument than we intend, a pointer to a return value
+  // using MyEvent below, we model a function that takes two integers and adds them
+  using MyEvent = geode::Dispatch<int*, int, int>;
+
+  inline geode::Result<int> addNumbers(int a, int b) {
+    if (!geode::Loader::get()->isModLoaded("your-mod-id")) return geode::Err("Mod not loaded");
+    int result = 0;
+    MyEvent("your-mod-id/your-event-id").send(&result, a, b);
+    return geode::Ok(result);
+  }
+}
 ```
-#### Posting
+#### Source
 ```cpp
-MyAmazingEvent::post(5);
-int result = MyAmazingEventWithAReturnValue::receive(5);
-```
-#### Listening
-```cpp
-MyAmazingEvent::listen<ListenerResult::Propagate>(+[](int x){ log::info("You sent: {}. Amazing.", x); });
-MyAmazingEvent::send<ListenerResult::Propagate>(+[](int x){ return x + 1; });
+#include<path-to-your-header-where-you-have-the-event>
+
+int addNumbers(int a, int b) { return a + b; }
+
+$execute {
+
+  my_mod::MyEvent("your-mod-id/your-event-id").listen(
+    [](int *result, int a, int b) {
+      *result = addNumbers(a, b);
+      return ListenerResult::Propagate; // you could leave this out, it defaults to Propagate
+    }
+  ).leak();
+  
+};
 ```
 
-Let's see...  
-The ID is defined only once, so you can't misspell it; check.  
-You can't accidentally not post the event and not notice it, because it's a static method on the EasyEvent type; check.  
-You get return values from functions without having to manually mess around with pointers repeatedly, for every API method; check.
+I have two issues with this approach:
+- you have to input the event ID twice, once in the header, and once in the source; you could work around this by defining it as a constant/macro in the header and using it, though some apis can get a lot of events, so you'd be defining a lot of constants
+- you have to mess around with pointers manually to get a return value; this is not particularly difficult, but it gets irritating doing this for every API function
+- the listener syntax makes it pretty hard to just pass an existing function, since we are forced to return a value convertible to boolean, and our method forces us to pass the pointer as the first argument: if your mod had an already existing addNumbers function that is (int, int) -> int, you couldn't just pass it directly to the listen method
+
+## EasyEvent
+To address those two issues, EasyEvent does three things:
+- issue #1: you can pass the event id to an EasyEvent as a template parameter, meaning you only ever define it once; no need for a constant/macro or risking misspelling anything
+- issue #2: support for events "with return values"
+- issue #3: function overloads for common operations, such as return values, which makes passing our (int, int) -> int function possible
+
+#### Header
+```cpp
+namespace my_mod {
+  // we make a dispatch event which contains one extra argument than we intend, a pointer to a return value
+  // using MyEvent below, we model a function that takes two integers and adds them
+  using MyEvent = EasyEvent::withID<"your-mod-id/your-event-id">::takes<int, int>::returns<int>;
+
+  inline geode::Result<int> addNumbers(int a, int b) {
+    if (!geode::Loader::get()->isModLoaded("your-mod-id")) return geode::Err("Mod not loaded");
+    return geode::Ok(MyEvent::sendAndReceive(a, b));
+  }
+}
+```
+#### Source
+```cpp
+#include<path-to-your-header-where-you-have-the-event>
+
+int addNumbers(int a, int b) { return a + b; }
+
+$execute {
+  my_mod::MyEvent::listenAndReturn<ListenerResult::Propagate>(addNumbers).leak();
+};
+```
 
 Do note that, under the hood, the "return values" are implemented the same way as my example which worked directly with dispatch events, with pointers, you just don't have to look at that.
 
-To me, this reads a lot better than event exports, plus you still get fine-grained control over the events themselves; more in the [documentation](DOCS.md).
+To me, this reads a lot better than event exports, plus you still get fine-grained control over the events themselves, as this implementation does not just hide them from you; more in the [documentation](DOCS.md).
 
 ## How to use
 
-Copy the header file (preferably the one from releases, as the one in the repo uses a lot of macros; the release version selectively expands those macros to make the code less ugly and to improve error messages; the generator script is also included in this repository, under the name `generate.sh`) into your mod, include it. Make sure to expose it in your API if you are using it there, and you probably are, since that is the point.  
+Copy the header file into your mod, include it. Make sure to expose it in your API if you are using it there, and you probably are, since that is the point.  
 Also make sure you compile with Clang. There is an internal compiler error on MSVC. If you know how to work around it without changing the interface, please open a pull request.
 
 This software, readme (excluding the examples copied directly from the Geode docs), and documentation is released into the public domain.
 
-There is also a testing file `event-teser.cpp`, which instantiates every template function (I *think*) to make sure it compiles. You may also use it as an example, but a better example mod may be added soon; for now, check out [Icon Kit Filter & Sort](https://github.com/nytelytee/geode-icon-kit-filter-and-sort), a mod of mine which uses the EasyEvent system.
+There is also a testing file `event-tester.cpp`, which instantiates every template function to make sure it compiles. You may use it as an example, but a better example mod may be added soon; for now, check out [Icon Kit Filter & Sort](https://github.com/nytelytee/geode-icon-kit-filter-and-sort), a mod of mine which uses the EasyEvent system.

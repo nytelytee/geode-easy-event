@@ -1,4 +1,4 @@
-/*
+﻿/*
  * This is free and unencumbered software released into the public domain.
  * 
  * Anyone is free to copy, modify, publish, use, compile, sell, or
@@ -54,18 +54,6 @@ namespace nytelyte::easy_event {
       FunctionHasValidReturnType<Function, ReturnType, EventParameters...>
     );
 
-    template <typename Class, typename ReturnType, typename... EventParameters>
-    using MemberFunction = typename geode::to_member<Class, ReturnType(EventParameters...)>::value;
-
-    template <typename Class, typename ReturnType, typename... EventParameters>
-    concept MemberFunctionHasValidReturnType = (
-      (std::is_void_v<ReturnType> && std::is_void_v<std::invoke_result_t<MemberFunction<Class, ReturnType, EventParameters...>, Class*, EventParameters...>>) ||
-      std::assignable_from<ReturnType&, std::invoke_result_t<MemberFunction<Class, ReturnType, EventParameters...>, Class*, EventParameters...>>
-    );
-
-    template <typename Class, typename ReturnType, typename... EventParameters>
-    concept IsValidMemberFunction = MemberFunctionHasValidReturnType<Class, ReturnType, EventParameters...>;
-
     template <typename EventID, typename EventParameters, typename EventReturn>
     struct EventImpl;
 
@@ -74,437 +62,210 @@ namespace nytelyte::easy_event {
     private:
       using EventReturnPointer = std::conditional_t<std::is_void_v<EventReturn>, std::nullptr_t, EventReturn*>;
     public:
-      // Actual internal dispatch event values, in case you need them
-      using Filter = std::conditional_t<
+      // Actual internal dispatch event value
+      using Event = std::conditional_t<
           std::is_void_v<EventReturn>,
-          geode::DispatchFilter<EventParameters...>,
-          geode::DispatchFilter<EventReturn*, EventParameters...>
+          geode::Dispatch<EventParameters...>,
+          geode::Dispatch<EventReturn*, EventParameters...>
       >;
-      using Event = Filter::Event;
-      using Listener = geode::EventListener<Filter>;
 
       // The parameters the EasyEvent is using right now, in case you need them
       static constexpr const char* ID = []{ if constexpr (std::is_void_v<EventID>) return nullptr; else return EventID::value; }();
       using Returns = EventReturn;
       using Takes = std::tuple<EventParameters...>;
 
-      // Normal post
-      inline static geode::ListenerResult postWithID(const char* id, EventParameters... args) {
-        if constexpr (std::is_void_v<EventReturn>) return Event(id, args...).post();
-        else return Event(id, nullptr, args...).post();
+      /****************************/
+      /* Base versions of senders */
+      /****************************/
+
+      // Normal send
+      inline static bool sendWithID(const char* id, EventParameters... args) {
+        if constexpr (std::is_void_v<EventReturn>) return Event(id).send(args...);
+        else return Event(id).send(nullptr, args...);
       }
       
-      // Raw post
-      inline static geode::ListenerResult rawPostWithID(const char* id, EventReturnPointer into, EventParameters... args) {
-        if constexpr (std::is_void_v<EventReturn>) return Event(id, args...).post();
-        else return Event(id, into, args...).post();
+      // Raw send
+      inline static bool rawSendWithID(const char* id, EventReturnPointer into, EventParameters... args) {
+        if constexpr (std::is_void_v<EventReturn>) return Event(id).send(args...);
+        else return Event(id).send(into, args...);
       }
 
-      // Receiving post
-      inline static EventReturn receiveWithID(const char* id, EventParameters... args)
+      // Send and receive
+      inline static EventReturn sendAndReceiveWithID(const char* id, EventParameters... args)
       requires (!std::is_void_v<EventReturn>)  {
         EventReturn into;
-        Event(id, &into, args...).post();
+        Event(id).send(&into, args...);
         return into;
       }
 
-      // Receiving both post
-      inline static std::pair<geode::ListenerResult, EventReturn> receiveBothWithID(const char* id, EventParameters... args)
+      // Send and receive both
+      inline static std::pair<bool, EventReturn> sendAndReceiveBothWithID(const char* id, EventParameters... args)
       requires (!std::is_void_v<EventReturn>) {
         EventReturn into;
-        geode::ListenerResult result = Event(id, &into, args...).post();
+        bool result = Event(id).send(&into, args...);
         return std::pair{result, into};
       }
-
-      // If the easy event has an embedded ID, these post/receive/receiveBoth/rawPost overloads are defined, allowing you to post the event without an ID
-      // This part is a lot more complicated for listeners given how many options they have to support, but luckily, at least this is simple enough to write
-      // out manually.
-      inline static geode::ListenerResult post(EventParameters... args)
-      requires (!std::is_void_v<EventID>)
-      { return postWithID(EventImpl::ID, args...); }
       
-      inline static geode::ListenerResult rawPost(EventReturnPointer into, EventParameters... args)
+      /*********************************/
+      /* Preset ID versions of senders */
+      /*********************************/
+
+      inline static bool send(EventParameters... args)
       requires (!std::is_void_v<EventID>)
-      { return rawPostWithID(EventImpl::ID, into, args...); }
+      { return sendWithID(EventImpl::ID, args...); }
+      
+      inline static bool rawSend(EventReturnPointer into, EventParameters... args)
+      requires (!std::is_void_v<EventID>)
+      { return rawSendWithID(EventImpl::ID, into, args...); }
 
-      inline static EventReturn receive(EventParameters... args)
+      inline static EventReturn sendAndReceive(EventParameters... args)
       requires (!std::is_void_v<EventID> && !std::is_void_v<EventReturn>)
-      { return receiveWithID(EventImpl::ID, args...); }
+      { return sendAndReceiveWithID(EventImpl::ID, args...); }
 
-      inline static std::pair<geode::ListenerResult, EventReturn> receiveBoth(EventParameters... args)
+      inline static std::pair<bool, EventReturn> sendAndReceiveBoth(EventParameters... args)
       requires (!std::is_void_v<EventID> && !std::is_void_v<EventReturn>)
-      { return receiveBothWithID(EventImpl::ID, args...); }
+      { return sendAndReceiveBothWithID(EventImpl::ID, args...); }
 
-      // Base functions
+      /******************************/
+      /* Base versions of listeners */
+      /******************************/
 
       // Preset result listening
-      template <geode::ListenerResult result, typename Function>
+      template <bool stop, typename Function>
       requires IsValidFunction<Function, void, EventParameters...>
-      inline static Listener listenWithID(const char* id, Function&& function) {
+      inline static geode::ListenerHandle listenWithID(const char* id, Function&& function, int priority = 0) {
         if constexpr (std::is_void_v<EventReturn>)
-          return Listener(
-            [func = std::forward<Function>(function)](EventParameters... args) {
-              func(args...);
-              return result;
-            },
-            Filter(id)
+          return Event(id).listen(
+            [func = std::forward<Function>(function)](EventParameters... args) { func(args...); return stop; },
+            priority
           );
         else
           // the underlying event will receive the return value pointer, but will do nothing with it
-          return Listener(
-            [func = std::forward<Function>(function)](EventReturn*, EventParameters... args) {
-              func(args...);
-              return result;
-            },
-            Filter(id)
+          return Event(id).listen(
+            [func = std::forward<Function>(function)](EventReturn*, EventParameters... args) { func(args...); return stop; },
+            priority
           );
       }
 
       // Unpreset result listening
       template <typename Function>
-      requires IsValidFunction<Function, geode::ListenerResult, EventParameters...>
-      inline static Listener listenWithID(const char* id, Function&& function) {
+      requires IsValidFunction<Function, bool, EventParameters...>
+      inline static geode::ListenerHandle listenWithID(const char* id, Function&& function, int priority = 0) {
         if constexpr (std::is_void_v<EventReturn>)
-          return Listener(std::forward<Function>(function), Filter(id));
+          return Event(id).listen(std::forward<Function>(function), priority);
         else
           // the underlying event will receive the return value pointer, but will do nothing with it
-          return Listener(
-            [func = std::forward<Function>(function)](EventReturn*, EventParameters... args) {
-              return func(args...);
-            },
-            Filter(id)
+          return Event(id).listen(
+            [func = std::forward<Function>(function)](EventReturn*, EventParameters... args) { return func(args...); },
+            priority
           );
       }
 
       // Preset result raw listening
-      template <geode::ListenerResult result, typename Function>
+      template <bool stop, typename Function>
       requires IsValidFunction<Function, void, EventReturnPointer, EventParameters...>
-      inline static Listener rawListenWithID(const char* id, Function&& function) {
+      inline static geode::ListenerHandle rawListenWithID(const char* id, Function&& function, int priority = 0) {
         if constexpr(std::is_void_v<EventReturn>)
-          return Listener(
-            [func = std::forward<Function>(function)](EventParameters... args) {
-              func(nullptr, args...);
-              return result;
-            },
-            Filter(id)
+          return Event(id).listen(
+            [func = std::forward<Function>(function)](EventParameters... args) { func(nullptr, args...); return stop; },
+            priority
           );
         else
-          return Listener(
-            [func = std::forward<Function>(function)](EventReturnPointer into, EventParameters... args) {
-              func(into, args...);
-              return result;
-            },
-            Filter(id)
+          return Event(id).listen(
+            [func = std::forward<Function>(function)](EventReturnPointer into, EventParameters... args) { func(into, args...); return stop; },
+            priority
           );
       }
 
       // Unpreset result raw listening
       template <typename Function>
-      requires IsValidFunction<Function, geode::ListenerResult, EventReturnPointer, EventParameters...>
-      inline static Listener rawListenWithID(const char* id, Function&& function) {
+      requires IsValidFunction<Function, bool, EventReturnPointer, EventParameters...>
+      inline static geode::ListenerHandle rawListenWithID(const char* id, Function&& function, int priority = 0) {
         if constexpr(std::is_void_v<EventReturn>)
-          return Listener(
-            [func = std::forward<Function>(function)](EventParameters... args) {
-              return func(nullptr, args...);
-            },
-            Filter(id)
+          return Event(id).listen(
+            [func = std::forward<Function>(function)](EventParameters... args) { return func(nullptr, args...); },
+            priority
           );
         else
-          return Listener(
-            [func = std::forward<Function>(function)](EventReturnPointer into, EventParameters... args) {
-              return func(into, args...);
-            },
-            Filter(id)
+          return Event(id).listen(
+            [func = std::forward<Function>(function)](EventReturnPointer into, EventParameters... args) { return func(into, args...); },
+            priority
           );
       }
 
-
       // Preset result sending
-      template <geode::ListenerResult result, typename Function>
+      template <bool stop, typename Function>
       requires IsValidFunction<Function, EventReturn, EventParameters...> && (!std::is_void_v<EventReturn>)
-      inline static Listener sendWithID(const char* id, Function&& function) {
-        return Listener(
+      inline static geode::ListenerHandle listenAndReturnWithID(const char* id, Function&& function, int priority = 0) {
+        return Event(id).listen(
           [func = std::forward<Function>(function)](EventReturn* into, EventParameters... args) {
-            if (into) *into = func(args...);
-            else func(args...);
-            return result;
+            if (into)
+              *into = func(args...);
+            else
+              func(args...); 
+            return stop; 
           },
-          Filter(id)
+          priority
         );
       }
 
       // Unpreset result sending
       template <typename Function>
-      requires IsValidFunction<Function, std::pair<geode::ListenerResult, EventReturn>, EventParameters...> && (!std::is_void_v<EventReturn>)
-      inline static Listener sendWithID(const char* id, Function&& function) {
-        return Listener(
+      requires IsValidFunction<Function, std::pair<bool, EventReturn>, EventParameters...> && (!std::is_void_v<EventReturn>)
+      inline static geode::ListenerHandle listenAndReturnWithID(const char* id, Function&& function, int priority = 0) {
+        return Event(id).listen(
           [func = std::forward<Function>(function)](EventReturn* into, EventParameters... args) {
-            geode::ListenerResult result;
-            if (into) std::tie(result, *into) = func(args...);
-            else std::tie(result, std::ignore) = func(args...);
-            return result;
+            bool stop;
+            if (into)
+              std::tie(stop, *into) = func(args...);
+            else
+              std::tie(stop, std::ignore) = func(args...);
+            return stop;
           },
-          Filter(id)
+          priority
         );
       }
 
-      // Base member functions, suffixed with On
+      /***********************************/
+      /* Preset ID versions of listeners */
+      /***********************************/
 
-      // Preset result listening
-      template <geode::ListenerResult result, typename Class>
-      requires IsValidMemberFunction<Class, void, EventParameters...>
-      inline static Listener listenWithIDOn(const char* id, Class* instance, MemberFunction<Class, void, EventParameters...> function) {
-        if constexpr (std::is_void_v<EventReturn>)
-          return Listener(
-            [instance, function](EventParameters... args) {
-              (instance->*function)(args...);
-              return result;
-            },
-            Filter(id)
-          );
-        else
-          // the underlying event will receive the return value pointer, but will do nothing with it
-          return Listener(
-            [instance, function](EventReturn*, EventParameters... args) {
-              (instance->*function)(args...);
-              return result;
-            },
-            Filter(id)
-          );
-      }
+      // listenWithID<bool>
+      template <bool stop, typename Function>
+      requires IsValidFunction<Function, void, EventParameters...> && (!std::is_void_v<EventID>)
+      static geode::ListenerHandle listen(Function&& function)
+      { return listenWithID<stop, Function>(EventImpl::ID, std::forward<Function>(function)); }
 
-      // Unpreset result listening
-      template <typename Class>
-      requires IsValidMemberFunction<Class, geode::ListenerResult, EventParameters...>
-      inline static Listener listenWithIDOn(const char* id, Class* instance, MemberFunction<Class, geode::ListenerResult, EventParameters...> function) {
-        if constexpr (std::is_void_v<EventReturn>)
-          return Listener(instance, function, Filter(id));
-        else
-          // the underlying event will receive the return value pointer, but will do nothing with it
-          return Listener(
-            [instance, function](EventReturn*, EventParameters... args) {
-              return (instance->*function)(args...);
-            },
-            Filter(id)
-          );
-      }
-
-      // Preset result raw listening
-      template <geode::ListenerResult result, typename Class>
-      requires IsValidMemberFunction<Class, void, EventReturnPointer, EventParameters...>
-      inline static Listener rawListenWithIDOn(const char* id, Class* instance, MemberFunction<Class, void, EventReturnPointer, EventParameters...> function) {
-        if constexpr (std::is_void_v<EventReturn>)
-          return Listener(
-            [instance, function](EventParameters... args) {
-              (instance->*function)(nullptr, args...);
-              return result;
-            },
-            Filter(id)
-          );
-        else
-          return Listener(
-            [instance, function](EventReturnPointer into, EventParameters... args) {
-              (instance->*function)(into, args...);
-              return result;
-            },
-            Filter(id)
-          );
-      }
-
-      // Unpreset result raw listening
-      template <typename Class>
-      requires IsValidMemberFunction<Class, geode::ListenerResult, EventReturnPointer, EventParameters...>
-      inline static Listener rawListenWithIDOn(const char* id, Class* instance, MemberFunction<Class, geode::ListenerResult, EventReturnPointer, EventParameters...> function) {
-        if constexpr(std::is_void_v<EventReturn>)
-          return Listener(
-            [instance, function](EventParameters... args) {
-              return (instance->*function)(nullptr, args...);
-            },
-            Filter(id)
-          );
-        else
-          return Listener(
-            [instance, function](EventReturnPointer into, EventParameters... args) {
-              return (instance->*function)(into, args...);
-            },
-            Filter(id)
-          );
-      }
-
-      // Preset result sending
-      template <geode::ListenerResult result, typename Class>
-      requires IsValidMemberFunction<Class, EventReturn, EventParameters...> && (!std::is_void_v<EventReturn>)
-      inline static Listener sendWithIDOn(const char* id, Class* instance, MemberFunction<Class, EventReturn, EventParameters...> function) {
-        return Listener(
-          [instance, function](EventReturn* into, EventParameters... args) {
-            if (into) *into = (instance->*function)(args...);
-            else (instance->*function)(args...);
-            return result;
-          },
-          Filter(id)
-        );
-      }
-
-      // Unpreset result sending
-      template <typename Class>
-      requires IsValidMemberFunction<Class, std::pair<geode::ListenerResult, EventReturn>, EventParameters...> && (!std::is_void_v<EventReturn>)
-      inline static Listener sendWithIDOn(const char* id, Class* instance, MemberFunction<Class, std::pair<geode::ListenerResult, EventReturn>, EventParameters...> function) {
-        return Listener(
-          [instance, function](EventReturn* into, EventParameters... args) {
-            geode::ListenerResult result;
-            if (into) std::tie(result, *into) = (instance->*function)(args...);
-            else std::tie(result, std::ignore) = (instance->*function)(args...);
-            return result;
-          },
-          Filter(id)
-        );
-      }
-
-      /**** START MACRO SEQUENCE ****/
-      #pragma push_macro("EE_NL")
-      #ifndef EASY_EVENT_PRETTIFY_MACROS_IS_THIS_NAME_LONG_ENOUGH_TO_NOT_ACCIDENTALLY_BE_DEFINED_BY_SOMEONE_ELSE_YET
-      #define EE_NL
-      #else
-      #undef EE_NL
-      #endif
-
-      #ifndef EASY_EVENT_PRETTIFY_MACROS_IS_THIS_NAME_LONG_ENOUGH_TO_NOT_ACCIDENTALLY_BE_DEFINED_BY_SOMEONE_ELSE_YET
-      // WARNING: Horrifying macro code ahead, good luck trying to understand this;
-      //          I need to define like 36 overloads for functions, which may have different names,
-      //          parameters, and template parameters. They are all extremely simple functions that can be
-      //          defined in terms of the above WithID functions, however.
-      // NOTE: Use the version of the file without these macros, generated from this file using a shell script also
-      //       inside of this repository. The generated file is in releases, even though you could just
-      //       run the script yourself. You are also able to use this file if you so wish, as I am ensuring that using it
-      //       is also safe:
-      //         - every macro is pushed and then popped, so I can't accidentally redefine someone else's macros
-      //           (the one exception is the macro that is used to preprocess this part of the file)
-      //         - EE_NL is defined (blank) if the prettifying macro is not defined, so it has no effect
-      //           (also pushed and popped in case someone else defines EE_NL)
-      //       I would, however, recommend using the version in releases, as error messages from defined macros are horrible.
-      //       This only exists so I can reproducibly create simple function overloads to avoid making mistakes.
-      #else
-      /**********************************************************************************************************/
-      /******************************************THIS PART IS AUTOGENERATED**************************************/
-      /**********************************************************************************************************/ EE_NL
-      #endif
-
-      #pragma push_macro("UNBRACKET_NO_COMMA")
-      #pragma push_macro("UNBRACKET_COMMA")
-      #pragma push_macro("UNBRACKET_REQUIRES_CLAUSE")
-      #pragma push_macro("CREATE_LISTENER")
-      #pragma push_macro("CREATE_MEMBER_LISTENER")
-      #pragma push_macro("CREATE_MAIN_GLOBAL_LISTENERS")
-      #pragma push_macro("CREATE_MAIN_GLOBAL_RAW_LISTENERS")
-      #pragma push_macro("CREATE_LISTENERS_WITH_PRESET_EVENT_ID")
-      #pragma push_macro("CREATE_RAW_LISTENERS_WITH_PRESET_EVENT_ID")
-
-      #define UNBRACKET_NO_COMMA(...) __VA_ARGS__
-      #define UNBRACKET_COMMA(...) __VA_ARGS__ __VA_OPT__(,)
-      #define UNBRACKET_REQUIRES_CLAUSE(...) __VA_OPT__(&&) __VA_ARGS__
-
-      #define CREATE_LISTENER(\
-        ExtraTemplateParameter, /* shall either be "(geode::ListenerResult result)" or "()" */ \
-        BaseReturnType, /* shall be non-blank and bracketed" */ \
-        BaseParameters, /* shall either be "(EventParameters...)" or "(EventReturnPointer, EventParameters...)" */ \
-        ListenerReturnType, /* shall either be "Listener" or "Listener*" */ \
-        Name, /* shall be non-blank */ \
-        ExtraFunctionParameter, /* shall either be "(const char* id)" or "()" */ \
-        ExtraRequiresClause, /* shall be bracketed */ \
-        ReturnPrefix, /* shall either be "new Listener" or "" */ \
-        BaseName, /* shall be non-blank */ \
-        ExtraTemplateArgument, /* shall either be "(result)" or "()" */\
-        ExtraFunctionArgument /* shall either be "id" or "EventImpl::ID" */ \
-      ) EE_NL\
-        template <UNBRACKET_COMMA ExtraTemplateParameter typename Function> EE_NL\
-        requires IsValidFunction<Function, UNBRACKET_NO_COMMA BaseReturnType, UNBRACKET_NO_COMMA BaseParameters> UNBRACKET_REQUIRES_CLAUSE ExtraRequiresClause EE_NL\
-        static ListenerReturnType Name(UNBRACKET_COMMA ExtraFunctionParameter Function&& function) EE_NL\
-        { return ReturnPrefix (BaseName<UNBRACKET_COMMA ExtraTemplateArgument Function>(ExtraFunctionArgument, std::forward<Function>(function))); } EE_NL
-
-      #define CREATE_MEMBER_LISTENER(\
-        ExtraTemplateParameter, /* shall either be "(geode::ListenerResult result)" or "()" */ \
-        BaseReturnType, /* shall be non-blank and bracketed */ \
-        BaseParameters, /* shall either be "(EventParameters...)" or "(EventReturnPointer, EventParameters...)" */ \
-        ListenerReturnType, /* shall either be "Listener" or "Listener*" */ \
-        Name, /* shall be non-blank */ \
-        ExtraFunctionParameter, /* shall either be "(const char* id)" or "()" */ \
-        ExtraRequiresClause, /* shall be bracketed */ \
-        ReturnPrefix, /* shall either be "new Listener" or "" */ \
-        BaseName, /* shall be non-blank */ \
-        ExtraTemplateArgument, /* shall either be "(result)" or "()" */\
-        ExtraFunctionArgument /* shall either be "id" or "EventImpl::ID" */ \
-      ) EE_NL\
-        template <UNBRACKET_COMMA ExtraTemplateParameter typename Class> EE_NL\
-        requires IsValidMemberFunction<Class, UNBRACKET_NO_COMMA BaseReturnType, UNBRACKET_NO_COMMA BaseParameters> UNBRACKET_REQUIRES_CLAUSE ExtraRequiresClause EE_NL\
-        static ListenerReturnType Name(UNBRACKET_COMMA ExtraFunctionParameter Class* instance, MemberFunction<Class, UNBRACKET_NO_COMMA BaseReturnType, UNBRACKET_NO_COMMA BaseParameters> function) EE_NL\
-        { return ReturnPrefix (BaseName<UNBRACKET_COMMA ExtraTemplateArgument Class>(ExtraFunctionArgument, instance, function)); } EE_NL
+      // listenWithID
+      template <typename Function>
+      requires IsValidFunction<Function, bool, EventParameters...> && (!std::is_void_v<EventID>)
+      static geode::ListenerHandle listen(Function&& function)
+      { return listenWithID<Function>(EventImpl::ID, std::forward<Function>(function)); }
       
-
-      #define CREATE_MAIN_GLOBAL_LISTENERS(Name, name, ReturnTypeTemplated, ReturnTypeUntemplated, ExtraRequires)\
-        CREATE_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventParameters...), Listener*, global##Name, (const char* id), ExtraRequires, new Listener, name, (result), id)\
-        CREATE_LISTENER((), ReturnTypeUntemplated, (EventParameters...), Listener*, global##Name, (const char* id), ExtraRequires, new Listener, name, (), id)\
-        CREATE_MEMBER_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventParameters...), Listener*, global##Name##On, (const char* id), ExtraRequires, new Listener, name##On, (result), id)\
-        CREATE_MEMBER_LISTENER((), ReturnTypeUntemplated, (EventParameters...), Listener*, global##Name##On, (const char* id), ExtraRequires, new Listener, name##On, (), id)\
+      // rawListenWithID<bool>
+      template <bool stop, typename Function>
+      requires IsValidFunction<Function, void, EventReturnPointer, EventParameters...> && (!std::is_void_v<EventID>)
+      static geode::ListenerHandle rawListen(Function&& function)
+      { return rawListenWithID<stop, Function>(EventImpl::ID, std::forward<Function>(function)); }
       
-      #define CREATE_MAIN_GLOBAL_RAW_LISTENERS(Name, name, ReturnTypeTemplated, ReturnTypeUntemplated, ExtraRequires)\
-        CREATE_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name, (const char* id), ExtraRequires, new Listener, name, (result), id)\
-        CREATE_LISTENER((), ReturnTypeUntemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name, (const char* id), ExtraRequires, new Listener, name, (), id)\
-        CREATE_MEMBER_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name##On, (const char* id), ExtraRequires, new Listener, name##On, (result), id)\
-        CREATE_MEMBER_LISTENER((), ReturnTypeUntemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name##On, (const char* id), (), new Listener, name##On, (), id)\
+      // rawListenWithID
+      template <typename Function>
+      requires IsValidFunction<Function, bool, EventReturnPointer, EventParameters...> && (!std::is_void_v<EventID>)
+      static geode::ListenerHandle rawListen(Function&& function)
+      { return rawListenWithID<Function>(EventImpl::ID, std::forward<Function>(function)); }
 
-      /*************************/
-      /* MAIN GLOBAL LISTENERS */
-      /*************************/ EE_NL
-      // Global versions of listenWithID[On]
-      CREATE_MAIN_GLOBAL_LISTENERS(ListenWithID, listenWithID, (void), (geode::ListenerResult), ()) EE_NL\
-      // Global versions of rawListenWithID[On]
-      CREATE_MAIN_GLOBAL_RAW_LISTENERS(RawListenWithID, rawListenWithID, (void), (geode::ListenerResult), ()) EE_NL\
-      // Global versions of sendWithID[On]
-      CREATE_MAIN_GLOBAL_LISTENERS(SendWithID, sendWithID, (EventReturn), (std::pair<geode::ListenerResult, EventReturn>), ((!std::is_void_v<EventReturn>)))
-
-      #define CREATE_LISTENERS_WITH_PRESET_EVENT_ID(Name, name, ReturnTypeTemplated, ReturnTypeUntemplated, ExtraRequires)\
-        CREATE_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventParameters...), Listener, name, (), ExtraRequires, , name##WithID, (result), EventImpl::ID)\
-        CREATE_LISTENER((), ReturnTypeUntemplated, (EventParameters...), Listener, name, (), ExtraRequires, , name##WithID, (), EventImpl::ID)\
-        CREATE_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventParameters...), Listener*, global##Name, (), ExtraRequires, , global##Name##WithID, (result), EventImpl::ID)\
-        CREATE_LISTENER((), ReturnTypeUntemplated, (EventParameters...), Listener*, global##Name, (), ExtraRequires, , global##Name##WithID, (), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventParameters...), Listener, name##On, (), ExtraRequires, , name##WithIDOn, (result), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((), ReturnTypeUntemplated, (EventParameters...), Listener, name##On, (), ExtraRequires, , name##WithIDOn, (), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventParameters...), Listener*, global##Name##On, (), ExtraRequires, , global##Name##WithIDOn, (result), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((), ReturnTypeUntemplated, (EventParameters...), Listener*, global##Name##On, (), ExtraRequires, , global##Name##WithIDOn, (), EventImpl::ID)
+      // listenAndReturnWithID<bool>
+      template <bool stop, typename Function>
+      requires IsValidFunction<Function, EventReturn, EventParameters...> && (!std::is_void_v<EventID>) && (!std::is_void_v<EventReturn>)
+      static geode::ListenerHandle listenAndReturn(Function&& function)
+      { return listenAndReturnWithID<stop , Function>(EventImpl::ID, std::forward<Function>(function)); }
       
-      #define CREATE_RAW_LISTENERS_WITH_PRESET_EVENT_ID(Name, name, ReturnTypeTemplated, ReturnTypeUntemplated, ExtraRequires)\
-        CREATE_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventReturnPointer, EventParameters...), Listener, name, (), ExtraRequires, , name##WithID, (result), EventImpl::ID)\
-        CREATE_LISTENER((), ReturnTypeUntemplated, (EventReturnPointer, EventParameters...), Listener, name, (), ExtraRequires, , name##WithID, (), EventImpl::ID)\
-        CREATE_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name, (), ExtraRequires, , global##Name##WithID, (result), EventImpl::ID)\
-        CREATE_LISTENER((), ReturnTypeUntemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name, (), ExtraRequires, , global##Name##WithID, (), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventReturnPointer, EventParameters...), Listener, name##On, (), ExtraRequires, , name##WithIDOn, (result), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((), ReturnTypeUntemplated, (EventReturnPointer, EventParameters...), Listener, name##On, (), ExtraRequires, , name##WithIDOn, (), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((geode::ListenerResult result), ReturnTypeTemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name##On, (), ExtraRequires, , global##Name##WithIDOn, (result), EventImpl::ID)\
-        CREATE_MEMBER_LISTENER((), ReturnTypeUntemplated, (EventReturnPointer, EventParameters...), Listener*, global##Name##On, (), ExtraRequires, , global##Name##WithIDOn, (), EventImpl::ID)
+      // listenAndReturnWithID
+      template <typename Function>
+      requires IsValidFunction<Function, std::pair<bool, EventReturn>, EventParameters...> && (!std::is_void_v<EventID>) && (!std::is_void_v<EventReturn>)
+      static geode::ListenerHandle listenAndReturn(Function&& function)
+      { return listenAndReturnWithID<Function>(EventImpl::ID, std::forward<Function>(function)); }
 
-
-      /*****************************/
-      /* PRESET EVENT ID LISTENERS */
-      /*****************************/ EE_NL
-      // Preset versions of listenWithID[On]/globalListenWithID[On]
-      CREATE_LISTENERS_WITH_PRESET_EVENT_ID(Listen, listen, (void), (geode::ListenerResult), ((!std::is_void_v<EventID>))) EE_NL\
-      // Preset versions of rawListenWithID[On]/globalRawListenWithID[On]
-      CREATE_RAW_LISTENERS_WITH_PRESET_EVENT_ID(RawListen, rawListen, (void), (geode::ListenerResult), ((!std::is_void_v<EventID>))) EE_NL\
-      // Preset versions of sendWithID[On]/globalSendWithID[On]
-      CREATE_LISTENERS_WITH_PRESET_EVENT_ID(Send, send, (EventReturn), (std::pair<geode::ListenerResult, EventReturn>), ((!std::is_void_v<EventID>) && (!std::is_void_v<EventReturn>)))
-
-      #pragma pop_macro("UNBRACKET_NO_COMMA")
-      #pragma pop_macro("UNBRACKET_COMMA")
-      #pragma pop_macro("UNBRACKET_REQUIRES_CLAUSE")
-      #pragma pop_macro("CREATE_LISTENER")
-      #pragma pop_macro("CREATE_MEMBER_LISTENER")
-      #pragma pop_macro("CREATE_MAIN_GLOBAL_LISTENERS")
-      #pragma pop_macro("CREATE_MAIN_GLOBAL_RAW_LISTENERS")
-      #pragma pop_macro("CREATE_LISTENERS_WITH_PRESET_EVENT_ID")
-      #pragma pop_macro("CREATE_RAW_LISTENERS_WITH_PRESET_EVENT_ID")
-
-      #pragma pop_macro("EE_NL")
-      /**** END MACRO SEQUENCE ****/
     };
 
     template <typename T>
@@ -541,11 +302,11 @@ namespace nytelyte::easy_event {
       ~EventBuilder() = delete;
 
       // Allows you to set the dispatch event ID as part of the type itself, so you only have to write it once; now you can't misspell it.
-      // You can remove the id via ::id<>, in case you want to do that for some reason.
-      template <StringLiteral... Id>
-      using id = std::remove_pointer_t<decltype(makeIdType<Id...>())>;
+      // You can remove the id via ::withID<>, in case you want to do that for some reason.
+      template <StringLiteral... ID>
+      using withID = std::remove_pointer_t<decltype(makeIdType<ID...>())>;
 
-      // You pass in the types of the parameters that the event takes, in order, the same way you would on a geode::DispatchEvent.
+      // You pass in the types of the parameters that the event takes, in order, the same way you would on a geode::Dispatch event.
       template <typename... Parameters>
       using takes = EventBuilder<EventID, std::tuple<Parameters...>, EventReturn>;
 
